@@ -1,85 +1,66 @@
-# Project Status (Public)
+# Homelab Status
 
-Current state and next steps for the homelab infrastructure.
-
----
-
-## What's working
-
-- **Core network:** OPNsense firewall routing, VLAN segmentation, DHCP and DNS services
-- **Encrypted DNS** — DNS-over-TLS, DNSSEC, full recursive resolution
-- **Encrypted backups** — all configurations backed up with encryption
-- **Hypervisor cluster** — two server nodes running Proxmox, connected for replication
-- **Pi-hole service** — network-wide ad-blocking DNS, deployed as LXC container
-- **Automatic DNS failover** — DHCP delivers Pi-hole as primary, firewall as secondary
-- **Primary device** — QoS configured to maintain gaming/streaming performance during congestion
-- **Backup automation** — Proxmox Backup Server connected and tested
+Last updated: 2026-06-15
 
 ---
 
-## Recent achievements (June 2026)
+## Current state: Operational
 
-**Infrastructure rebuild:** Complete factory reset of firewall and VLAN infrastructure
-from scratch. The session involved:
-
-1. Clean OPNsense installation and interface assignment
-2. VLAN trunk and access port configuration
-3. Separate subnet assignment for WAN and LAN (critical for NAT)
-4. DHCP service binding to all VLAN interfaces
-5. Two hypervisor deployments on VLAN 30
-6. Fresh Pi-hole installation and network-wide DNS integration
-7. QoS traffic shaper configuration for performance optimization
-
-**Key problems solved:**
-- Firewall interface assignment conflicts (old config vs new hardware)
-- WAN/LAN subnet collision preventing NAT
-- DHCP service not listening on VLAN interfaces
-- DNS-over-TLS configuration and verification
-- Gaming latency issues (fixed with QoS)
-
-All services now stable and tested.
+Core infrastructure live. Open NAT achieved for gaming. Management UI
+segmentation in progress. All services running.
 
 ---
 
-## Next priorities
+## Services
 
-### Security hardening
-- **Firewall rule refinement** — Replace allow-all rules with specific per-VLAN policies
-  - Allow DNS to Pi-hole only
-  - Allow outbound internet (WAN) only
-  - Block all inter-VLAN traffic by default
-- **Secondary DNS fallback** — Add firewall as backup DNS in DHCP if Pi-hole is down
-- **IDS/IPS** — Deploy Suricata in detection mode
-
-### Service expansion
-- **Container orchestration** — Docker host for light services (monitoring, dashboards)
-- **GPU passthrough** — Ollama for local LLM inference (requires IOMMU/VFIO)
-- **Redundancy** — Secondary Pi-hole container on backup node for DNS failover
-
-### Deferred (waiting for storage)
-- **NAS deployment** — Local backup storage and media server foundation
-- **Media services** — Jellyfin or Plex, Immich for photo backups
-- **VPN services** — Mullvad integration on firewall (latency tradeoff)
-- **Inbound access** — WireGuard for remote management
+| Service | Role | Status |
+|---|---|---|
+| OPNsense | Firewall / router / DHCP / DNS relay | ✅ Running |
+| Proxmox | Hypervisor / container host | ✅ Running |
+| Pi-hole (LXC) | Network-wide DNS ad-blocking | ✅ Running |
+| Unbound | Recursive DNS resolver (DNSSEC) | ✅ Running |
+| Suricata | Intrusion detection (alert-only) | ✅ Running |
+| Dnsmasq | DHCP + local DNS for all VLANs | ✅ Running |
 
 ---
 
-## Infrastructure notes
+## Recent changes
 
-**VLAN design:** Three-tier segmentation — management, primary device, and servers.
-Each VLAN has its own subnet and firewall rules.
+### Open NAT for gaming (double-NAT environment)
 
-**Firewall architecture:** Single-point-of-failure OPNsense with all routing logic
-centralized. Future: consider backup firewall.
+Resolved Strict NAT behind a double-NAT setup (ISP router → OPNsense edge).
+Approach:
+- ISP router Static NAT → OPNsense WAN (makes OPNsense the true edge)
+- OPNsense Outbound NAT: hybrid mode + static port rule (Strict → Moderate)
+- OPNsense Destination NAT on gaming ports with correct rule association type
+  (Moderate → Open)
+- dnsmasq static DHCP reservation for gaming PC MAC to lock the IP permanently
 
-**DNS resilience:** Pi-hole blocks ads; Unbound provides full recursive resolution.
-If Pi-hole is down, devices can still resolve via firewall (with ads). A secondary
-Pi-hole on the backup node is planned.
+### Management UI segmentation
 
-**Double-NAT:** Internet service provider's modem has no bridge mode, resulting
-in double-NAT. Functional but limits inbound access. Port-forwarding for services
-would require rules on both NAT layers.
+Two-layer restriction (service-level binding + OPNsense firewall rules) so
+admin interfaces (OPNsense, Proxmox, Pi-hole) are only reachable from the
+MGMT VLAN:
+- OPNsense: listen interface set to MGMT VLAN only
+- Proxmox: source-IP filter via pveproxy ALLOW_FROM
+- Pi-hole: lighttpd bound to server VLAN IP
+- OPNsense block rules on workstation and server VLANs for admin ports
 
-**Performance tuning:** QoS traffic shaper prioritizes primary device traffic to
-maintain gaming/streaming responsiveness during background downloads or service activity.
+### Suricata IDS confirmed operational
+
+Running in netmap capture mode, alert-only. Inbound internet scan traffic
+(common ports like RDP, MSSQL, PostgreSQL) now visible in Suricata logs — this
+is expected behavior after making OPNsense the true WAN edge. OPNsense default
+deny handles actual enforcement.
+
+---
+
+## In progress
+
+- Replace overly permissive allow-all rule on workstation VLAN with specific
+  per-protocol rules to complete inter-VLAN segmentation
+- dnsmasq static reservation verification for gaming PC
+- Proxmox automated backup scheduling
+- Secondary Pi-hole for DNS redundancy
+- Mullvad VPN on OPNsense (with policy routing to exclude gaming traffic)
 

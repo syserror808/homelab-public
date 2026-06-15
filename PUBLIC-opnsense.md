@@ -1,155 +1,120 @@
-# OPNsense Configuration (Public)
+# OPNsense Configuration
 
-Firewall and routing configuration for the homelab. All IP addresses and specific
-hardware details have been sanitized.
-
----
-
-## Interfaces
-
-| Role | Device | Config | Purpose |
-|------|--------|--------|---------|
-| WAN | Primary NIC | DHCP (private subnet) | Internet uplink |
-| MGMT (OPT1) | VLAN 10 trunk | Static 10.0.0.1/24 | Management VLAN |
-| Primary (OPT2) | VLAN 20 trunk | Static 10.0.1.1/24 | Primary device VLAN |
-| Servers (OPT3) | VLAN 30 trunk | Static 10.0.2.1/24 | Hypervisor VLAN |
-
-All interfaces use Intel GbE NICs (resolved Realtek watchdog timeout issues on
-previous hardware).
+Hardware: Dedicated x86 firewall appliance (Intel NICs)
+WAN: Residential fiber ISP (double-NAT environment)
+Interfaces: WAN + three VLAN subinterfaces
 
 ---
 
-## DHCP Service (Dnsmasq)
+## VLAN interfaces
 
-**Critical configuration:** The DHCP service must listen on **all** VLAN interfaces,
-not just the primary LAN. This was the root cause of a multi-day outage.
-
-```
-Listening interfaces: Management, Primary, Servers
-(DO NOT include WAN)
-```
-
-### DHCP pools
-
-| VLAN | Range |
-|------|-------|
-| Management | 10.0.0.100–10.0.0.200 |
-| Primary | 10.0.1.100–10.0.1.200 |
-| Servers | 10.0.2.100–10.0.2.200 |
-
-### Static reservations
-
-Reserved addresses (outside pools):
-- Ad-blocking DNS service: 10.0.2.50
-- Primary hypervisor: 10.0.2.10
-- Backup hypervisor: 10.0.2.11
-
-### DNS via DHCP option 6
-
-All VLANs have DHCP option 6 set to deliver:
-1. Primary: ad-blocking DNS service (10.0.2.50)
-2. Secondary: firewall recursive resolver (10.0.2.1) — fallback if primary is down
-
-Devices pick up the new DNS on lease renewal.
+| VLAN | Name | Subnet | Purpose |
+|---|---|---|---|
+| 10 | MGMT | 10.0.10.0/24 | Management and admin workstations |
+| 20 | Workstation | 10.0.20.0/24 | Primary gaming/workstation PC |
+| 30 | Server | 10.0.30.0/24 | Proxmox, Pi-hole, self-hosted services |
 
 ---
 
-## DNS Resolver (Unbound)
+## DNS / DHCP
 
-**Full recursive resolution** — no upstream forwarding. Unbound queries root
-servers directly for all lookups.
+### Dnsmasq
 
-- Listening on port 53, all interfaces
-- DNSSEC enabled and enforced
-- Caching enabled
+Handles DHCP and local DNS for all VLANs. Must be bound explicitly to each
+VLAN interface — not bound by default.
 
-### DNS flow
+Static DHCP reservations by MAC address ensure key hosts (gaming PC, DNS server)
+hold fixed IPs so NAT rules and DNS configurations never silently break.
+
+DHCP option 6 (DNS server) on all VLANs points to Pi-hole, ensuring all clients
+use the filtering resolver.
+
+### DNS chain
 
 ```
 clients
-  ↓ (query for domain)
-ad-blocking DNS service (filters ads)
-  ↓ (ad-free query)
-OPNsense Unbound (recursive resolution)
   ↓
-root servers
+Pi-hole — ad/tracker filtering
+  ↓
+Unbound — recursive resolver, DNSSEC enforced
+  ↓
+root servers (no third-party forwarders)
 ```
-
-No DNS loops: the ad-blocking service does not forward back to itself.
 
 ---
 
-## Quality of Service (Traffic Shaper)
+## NAT — double-NAT environment
 
-Configured to maintain gaming/streaming performance on the primary device
-despite concurrent network activity.
+The firewall sits behind an ISP-provided router. The firewall's WAN IP is a
+private address, not the public IP. Standard port forwarding in OPNsense has no
+effect until the ISP router is configured to treat the firewall as the true edge.
 
-### Pipe configuration
+**Solution:** ISP router Static NAT pointing all inbound traffic to the
+firewall's WAN IP. This avoids the need for bridge mode (which on this ISP
+device would have disabled DHCP for other household devices).
 
-One pipe for the primary device VLAN with default bandwidth allocation.
+**Side effect:** With the firewall now receiving all inbound internet traffic,
+Suricata starts seeing internet scan/probe traffic that the ISP router was
+previously absorbing silently. This is correct and expected behavior.
 
-### Queue configuration
+### Outbound NAT (hybrid mode) — gaming PC
 
-| Queue | Priority | Purpose |
-|-------|----------|---------|
-| primary-queue | 100 (high) | Primary device traffic (gaming, streaming) |
+A static port rule prevents OPNsense from randomizing UDP source ports for the
+gaming PC's IP. Port randomization causes NAT type degradation in games that
+use UDP hole-punching for peer negotiation.
 
-### Firewall rules
+### Destination NAT — gaming ports
 
-Primary device VLAN traffic is routed through the queue:
+Port forwards for the relevant UDP gaming ports pointing to the gaming PC's
+reserved IP.
 
-```
-Interface: Primary
-Direction: inbound
-Protocol: any
-Source: Primary subnet
-Queue: primary-queue
-```
+Critical configuration detail: the "firewall rule association" field in
+OPNsense Destination NAT must be set to **Register rule** (not Manual or Pass).
+This auto-generates the associated firewall pass rule. Without it, the
+Destination NAT rule exists but is silently skipped — the ports remain
+effectively closed despite the rule appearing correct in the UI.
 
-**Effect:** gaming and video streaming packets are deprioritized less than
-background download or service traffic, maintaining responsiveness during
-congestion.
-
----
-
-## Firewall rules (current)
-
-Basic per-VLAN allow rules:
-
-| VLAN | Action | Source | Destination |
-|------|--------|--------|-------------|
-| Management | Allow | MGMT subnet | any |
-| Primary | Allow | Primary subnet | any |
-| Servers | Allow | Servers subnet | any |
-
-**Security gap:** These rules are overly permissive. The Primary device can
-currently reach the Servers VLAN, defeating segmentation.
-
-### Hardening plan (to-do)
-
-Replace the per-VLAN allow-all rules with specific policies:
-
-1. Management → ad-blocking DNS (port 53) and firewall (web UI)
-2. Primary → ad-blocking DNS (port 53) and WAN (internet)
-3. Servers → ad-blocking DNS (port 53) and WAN (internet)
-4. Block all inter-VLAN traffic by default
-
-This requires careful testing — do one rule at a time and verify no lockouts.
+Result: Open NAT from a double-NAT setup, no DMZ, no bridge mode.
 
 ---
 
-## Hardening completed
+## Firewall rules
 
-- Encrypted config backups
-- Full recursive DNS resolution (no third-party dependencies)
-- DHCP service bound to correct interfaces
-- QoS for performance
-- Per-VLAN firewall rules (basic)
+### Management UI restriction
 
-## Hardening planned
+Two-layer approach:
 
-- Specific inter-VLAN firewall rules (top priority)
-- Suricata IDS/IPS (detection mode)
-- Web UI / SSH access restricted to management VLAN
-- VPN integration for encrypted internet uplink
+**Service-level binding:**
+- OPNsense: listen interface set to MGMT VLAN only
+- Proxmox: source-IP filter in pveproxy configuration
+- Pi-hole: lighttpd bound to server VLAN IP
+
+**OPNsense block rules** (on workstation and server VLAN interfaces):
+Block rules placed above any allow rules targeting admin service ports
+(OPNsense web UI, Proxmox port 8006, Pi-hole web UI). OPNsense processes
+rules top-down; block rules must be above allow-all rules to be effective.
+
+### Workstation VLAN — pending hardening
+
+Current state: block rules above a legacy allow-all. Inter-VLAN traffic is
+partially restricted but not fully segmented.
+
+Target state: replace allow-all with explicit specific rules:
+- Allow → Pi-hole (DNS port 53)
+- Allow → internet (WAN)
+- Block → MGMT VLAN
+- Block → Server VLAN
+
+---
+
+## Suricata IDS
+
+- Capture mode: netmap (alert-only; no inline blocking)
+- Pattern matcher: Hyperscan, promiscuous mode enabled
+- Active rulesets: ET Open core (malware, exploit, botcc, phishing), abuse.ch
+  botnet/feodo/ssl feeds, TOR exit nodes
+- Excluded: gaming rulesets (false positives on game traffic), P2P rulesets
+  (conflict with planned VPN routing)
+- Enforcement: OPNsense default deny handles blocking; Suricata provides
+  visibility only
 
