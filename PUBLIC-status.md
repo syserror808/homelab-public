@@ -6,8 +6,8 @@ Last updated: 2026-06-15
 
 ## Current state: Operational
 
-Core infrastructure live. Open NAT achieved for gaming. Management UI
-segmentation in progress. All services running.
+Core infrastructure live. True VLAN segmentation achieved across all three
+VLANs. Open NAT confirmed. All services running.
 
 ---
 
@@ -24,43 +24,41 @@ segmentation in progress. All services running.
 
 ---
 
-## Recent changes
+## Completed milestones
 
-### Open NAT for gaming (double-NAT environment)
+### ✅ True VLAN segmentation (2026-06-15)
+All three VLANs now enforce proper inter-VLAN isolation via OPNsense firewall
+rules. Each VLAN can only reach what it needs — no lateral movement between
+workstation, server, and management networks.
+- Workstation VLAN: blocked from MGMT and Server, DNS and internet allowed
+- Server VLAN: blocked from MGMT and Workstation, DNS upstream and internet allowed
+- MGMT VLAN: full access retained for administration
+- Verified across all three VLANs
 
-Resolved Strict NAT behind a double-NAT setup (ISP router → OPNsense edge).
-Approach:
-- ISP router Static NAT → OPNsense WAN (makes OPNsense the true edge)
-- OPNsense Outbound NAT: hybrid mode + static port rule (Strict → Moderate)
-- OPNsense Destination NAT on gaming ports with correct rule association type
-  (Moderate → Open)
-- dnsmasq static DHCP reservation for gaming PC MAC to lock the IP permanently
+### ✅ Open NAT in double-NAT environment
+Achieved Open NAT for gaming behind a double-NAT setup without bridge mode
+or DMZ. Three-part solution: ISP Static NAT + outbound static port rule +
+destination NAT with correct rule association. Static DHCP reservation anchors
+the gaming machine IP permanently.
 
-### Management UI segmentation
+### ✅ Management UI segmentation
+Two-layer restriction (service-level binding + firewall rules) ensures admin
+interfaces are only reachable from the MGMT VLAN.
 
-Two-layer restriction (service-level binding + OPNsense firewall rules) so
-admin interfaces (OPNsense, Proxmox, Pi-hole) are only reachable from the
-MGMT VLAN:
-- OPNsense: listen interface set to MGMT VLAN only
-- Proxmox: source-IP filter via pveproxy ALLOW_FROM
-- Pi-hole: lighttpd bound to server VLAN IP
-- OPNsense block rules on workstation and server VLANs for admin ports
+### ✅ DNS filtering + recursive resolution
+Full chain: clients → Pi-hole (filtering) → Unbound (recursive, DNSSEC) →
+root servers. No third-party DNS forwarders.
 
-### Suricata IDS confirmed operational
-
-Running in netmap capture mode, alert-only. Inbound internet scan traffic
-(common ports like RDP, MSSQL, PostgreSQL) now visible in Suricata logs — this
-is expected behavior after making OPNsense the true WAN edge. OPNsense default
-deny handles actual enforcement.
+### ✅ Suricata IDS
+Running in netmap/alert-only mode. Inbound internet scan traffic visible in
+logs — expected behavior after making the firewall the true WAN edge.
 
 ---
 
-## In progress
+## In progress / next steps
 
-- Replace overly permissive allow-all rule on workstation VLAN with specific
-  per-protocol rules to complete inter-VLAN segmentation
-- dnsmasq static reservation verification for gaming PC
-- Proxmox automated backup scheduling
+- Proxmox backup automation (top priority — no automated backups yet)
 - Secondary Pi-hole for DNS redundancy
-- Mullvad VPN on OPNsense (with policy routing to exclude gaming traffic)
-
+- Mullvad VPN with policy routing (exclude gaming traffic from tunnel)
+- Proxmox service expansion: Grafana, Wazuh, Vaultwarden, Nextcloud
+- Suricata tuning after alert data accumulates

@@ -20,14 +20,12 @@ Interfaces: WAN + three VLAN subinterfaces
 
 ### Dnsmasq
 
-Handles DHCP and local DNS for all VLANs. Must be bound explicitly to each
-VLAN interface — not bound by default.
+Handles DHCP and local DNS for all VLANs. Must be explicitly bound to each
+VLAN interface. Static DHCP reservations by MAC address lock key hosts to
+fixed IPs so NAT rules and DNS config never silently break.
 
-Static DHCP reservations by MAC address ensure key hosts (gaming PC, DNS server)
-hold fixed IPs so NAT rules and DNS configurations never silently break.
-
-DHCP option 6 (DNS server) on all VLANs points to Pi-hole, ensuring all clients
-use the filtering resolver.
+DHCP option 6 on all VLANs points to Pi-hole, ensuring all clients use the
+filtering resolver regardless of VLAN.
 
 ### DNS chain
 
@@ -45,76 +43,86 @@ root servers (no third-party forwarders)
 
 ## NAT — double-NAT environment
 
-The firewall sits behind an ISP-provided router. The firewall's WAN IP is a
-private address, not the public IP. Standard port forwarding in OPNsense has no
-effect until the ISP router is configured to treat the firewall as the true edge.
+Firewall sits behind ISP router. Standard port forwarding has no effect until
+the ISP router treats the firewall as the true inbound edge.
 
-**Solution:** ISP router Static NAT pointing all inbound traffic to the
-firewall's WAN IP. This avoids the need for bridge mode (which on this ISP
-device would have disabled DHCP for other household devices).
+Solution: ISP router Static NAT → firewall WAN IP. Avoids bridge mode which
+would have disabled the ISP router's DHCP/WiFi for other household devices.
 
-**Side effect:** With the firewall now receiving all inbound internet traffic,
-Suricata starts seeing internet scan/probe traffic that the ISP router was
-previously absorbing silently. This is correct and expected behavior.
+### Outbound NAT — static port rule for gaming
 
-### Outbound NAT (hybrid mode) — gaming PC
-
-A static port rule prevents OPNsense from randomizing UDP source ports for the
-gaming PC's IP. Port randomization causes NAT type degradation in games that
-use UDP hole-punching for peer negotiation.
+Prevents the firewall from randomizing UDP source ports for the gaming machine.
+Port randomization breaks NAT type negotiation in games using UDP hole-punching.
+Result: NAT Strict → Moderate.
 
 ### Destination NAT — gaming ports
 
-Port forwards for the relevant UDP gaming ports pointing to the gaming PC's
-reserved IP.
+Port forwards for relevant UDP gaming ports to the gaming machine's reserved IP.
 
-Critical configuration detail: the "firewall rule association" field in
-OPNsense Destination NAT must be set to **Register rule** (not Manual or Pass).
-This auto-generates the associated firewall pass rule. Without it, the
-Destination NAT rule exists but is silently skipped — the ports remain
-effectively closed despite the rule appearing correct in the UI.
-
-Result: Open NAT from a double-NAT setup, no DMZ, no bridge mode.
+Critical detail: the firewall rule association field must be set to
+**Register rule** — not Manual or Pass. This auto-generates the required
+associated firewall pass rule. Without it the Destination NAT rule exists in
+the UI but is silently skipped. Result: NAT Moderate → Open.
 
 ---
 
 ## Firewall rules
 
-### Management UI restriction
+### VLAN 10 — MGMT
 
-Two-layer approach:
+Full outbound access. Administration VLAN — no restrictions on what it can reach.
 
-**Service-level binding:**
+### VLAN 20 — Workstation (hardened 2026-06-15)
+
+**Key lesson learned:** The DNS allow rule must be placed above the Server VLAN
+block rule. Pi-hole lives on the Server VLAN subnet — if the block rule matches
+first, DNS breaks even though there's an explicit allow rule for it. OPNsense
+processes rules top-down, first match wins.
+
+| Order | Action | Destination | Port | Description |
+|---|---|---|---|---|
+| 1 | Allow | Pi-hole IP | 53 | DNS to Pi-hole |
+| 2 | Block | MGMT subnet | any | Block → MGMT |
+| 3 | Block | Server subnet | any | Block → Server |
+| 4 | Allow | any | any | Allow internet |
+
+Verified: cross-VLAN pings fail, internet and DNS work, Open NAT intact.
+
+### VLAN 30 — Server (hardened 2026-06-15)
+
+Same DNS-first lesson applies: Pi-hole needs to reach Unbound on the MGMT
+gateway IP for recursive resolution. DNS allow must be above the MGMT block.
+
+| Order | Action | Destination | Port | Description |
+|---|---|---|---|---|
+| 1 | Allow | MGMT gateway | 53 | DNS to Unbound |
+| 2 | Block | Workstation subnet | any | Block → Workstation |
+| 3 | Block | MGMT subnet | any | Block → MGMT |
+| 4 | Allow | any | any | Allow internet |
+
+Verified: Pi-hole DNS chain intact, Server cannot reach Workstation or MGMT.
+
+---
+
+## Management UI restriction (two-layer)
+
+### Service-level binding
 - OPNsense: listen interface set to MGMT VLAN only
-- Proxmox: source-IP filter in pveproxy configuration
-- Pi-hole: lighttpd bound to server VLAN IP
+- Proxmox: source-IP filter via pveproxy ALLOW_FROM
+- Pi-hole: lighttpd bound to Server VLAN IP
 
-**OPNsense block rules** (on workstation and server VLAN interfaces):
-Block rules placed above any allow rules targeting admin service ports
-(OPNsense web UI, Proxmox port 8006, Pi-hole web UI). OPNsense processes
-rules top-down; block rules must be above allow-all rules to be effective.
-
-### Workstation VLAN — pending hardening
-
-Current state: block rules above a legacy allow-all. Inter-VLAN traffic is
-partially restricted but not fully segmented.
-
-Target state: replace allow-all with explicit specific rules:
-- Allow → Pi-hole (DNS port 53)
-- Allow → internet (WAN)
-- Block → MGMT VLAN
-- Block → Server VLAN
+### Firewall block rules
+Block rules on Workstation and Server VLAN interfaces targeting admin service
+ports (OPNsense web UI, Proxmox 8006, Pi-hole web UI). Rules sit above
+allow rules so they match first.
 
 ---
 
 ## Suricata IDS
 
-- Capture mode: netmap (alert-only; no inline blocking)
+- Capture mode: netmap (alert-only)
 - Pattern matcher: Hyperscan, promiscuous mode enabled
-- Active rulesets: ET Open core (malware, exploit, botcc, phishing), abuse.ch
-  botnet/feodo/ssl feeds, TOR exit nodes
-- Excluded: gaming rulesets (false positives on game traffic), P2P rulesets
-  (conflict with planned VPN routing)
-- Enforcement: OPNsense default deny handles blocking; Suricata provides
-  visibility only
-
+- Active rulesets: ET Open core (malware, exploit, botcc, phishing),
+  abuse.ch feeds, TOR exit nodes
+- Excluded: gaming rulesets (false positives), P2P rulesets (VPN conflict)
+- Enforcement: OPNsense default deny; Suricata provides visibility only
