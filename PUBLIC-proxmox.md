@@ -1,130 +1,87 @@
-# Proxmox Infrastructure (Public)
-
-Hypervisor cluster and services running on two server nodes.
+# Proxmox Configuration
 
 ---
 
 ## Nodes
 
-| | Primary | Backup |
+| Node | Role | Status |
 |---|---|---|
-| Role | Main compute, services | Replication, backup target |
-| IP (static) | 10.0.2.10/24 | 10.0.2.11/24 |
-| VLAN | 30 (Servers) | 30 (Servers) |
-| Switch port | 3 (untagged) | 4 (untagged) |
-| Web UI | https://10.0.2.10:8006 | https://10.0.2.11:8007 (PBS) |
-
-Both nodes are mini PCs with modest specs (8GB RAM, small SSD). Sufficient for
-light workloads (containers, small VMs).
+| Primary hypervisor | Runs containers and VMs | ✅ Active |
+| Proxmox Backup Server | Dedicated backup target | ✅ Active |
 
 ---
 
-## Proxmox Backup Server (PBS)
+## Storage
 
-Dedicated backup infrastructure on the secondary node.
-
-**Purpose:** Store VM/container backups locally, avoid data loss if primary node fails.
-
-**Storage:** Local filesystem (`/backup`), unencrypted for now. Future: encrypted
-when NAS arrives.
-
-**Testing:** Manual backups verified; restore tested.
+| Type | Content | Purpose |
+|---|---|---|
+| Directory | ISO, CT templates, local backup | Local storage |
+| LVM-Thin | Disk images, Containers | VM/CT storage |
+| Proxmox Backup Server | Backup | Offnode backup target |
 
 ---
 
-## Pi-hole service
+## Containers / VMs
 
-**Type:** LXC container (unprivileged), running Debian
+| ID | Type | Name | VLAN | Status |
+|---|---|---|---|---|
+| 100 | LXC | Pi-hole | Server VLAN | ✅ Running |
 
-**Function:** Network-wide ad-blocking DNS
+### Pi-hole LXC notes
 
-**Config:**
-- Upstream: firewall's Unbound resolver
-- Interface: "Permit all origins" (required for cross-VLAN queries)
-- DHCP: all VLANs deliver Pi-hole IP as primary DNS
+- Static DHCP reservation (MAC-based) outside DHCP pool
+- No VLAN tag on container interface (switch port is untagged)
+- Pi-hole set to "Permit all origins" for cross-VLAN DNS queries
+- Upstream: OPNsense Unbound (recursive, no third-party forwarders)
+- lighttpd bound to Server VLAN IP (admin UI restricted)
 
-**Deployment notes:**
-- **VLAN-aware bridge required:** without `bridge-vlan-aware yes` in
-  `/etc/network/interfaces`, containers got only IPv6 link-local (no IPv4)
-- **No VLAN tag on untagged port:** switch port is untagged VLAN 30, so the
-  container's network interface must NOT set `tag=30`. Double-tagging broke
-  DHCP.
-- **Dnsmasq listening on VLAN interfaces:** DHCP was broken until Dnsmasq was
-  configured to listen on all VLAN interfaces, not just LAN
+### Proxmox bridge — VLAN awareness requirement
 
-**Risks:**
-- Single point of failure for DNS across all VLANs
-- Mitigation: secondary DNS fallback in DHCP (firewall), secondary Pi-hole
-  container planned
+For containers to pass tagged traffic, the Proxmox host bridge requires:
+```
+bridge-vlan-aware yes
+bridge-vids 2-4094
+```
+Without this setting, LXC containers on VLAN-aware networks cannot reach
+the network regardless of other configuration.
 
 ---
 
-## Container network (template)
+## Backup configuration
 
-For LXC on untagged access port (e.g., VLAN 30):
+### Scheduled job
 
-```
-net0: name=eth0,bridge=vmbr0,hwaddr=...,ip=dhcp,type=veth
-```
+- Frequency: daily at 02:30
+- Target: all containers and VMs
+- Mode: Snapshot
+- Compression: Zstd
+- Retention: 7 daily backups (keep-last-7)
 
-**Do NOT include:**
-- `tag=30` (switch port is untagged)
-- IP configuration (use DHCP)
+### Verification
 
-**Must include:**
-- `bridge=vmbr0` (VLAN-aware bridge)
-- `ip=dhcp` (get IP from OPNsense Dnsmasq)
+Backups verified via PBS CLI after first run — snapshot confirmed in datastore
+with correct timestamp and file set (catalog, client log, config, root archive).
 
-**Bridge interface config:**
+### Proxmox apt no-subscription fix
 
-```
-auto vmbr0
-iface vmbr0 inet static
-    address 10.0.2.10/24
-    gateway 10.0.2.1
-    bridge-ports nic0
-    bridge-vlan-aware yes
-    bridge-vids 2-4094
-    bridge-stp off
-    bridge-fd 0
+Proxmox defaults to the enterprise repo which requires a paid subscription.
+For homelab use, replace with the community repo:
+
+```bash
+echo "# disabled" > /etc/apt/sources.list.d/pve-enterprise.list
+echo "deb http://download.proxmox.com/debian/pve bookworm pve-no-subscription" \
+  > /etc/apt/sources.list.d/pve-community.list
+apt update
 ```
 
-The `bridge-vlan-aware yes` is critical — without it, containers can't get
-DHCP leases.
-
 ---
 
-## Services deployed
+## Planned services
 
-- **Pi-hole (LXC):** ad-blocking DNS, running continuously
-- **Future:** Docker host for light services (monitoring, dashboards)
-- **Future:** Ollama container for local LLM inference (requires GPU passthrough)
-
----
-
-## Infrastructure improvements
-
-**Completed:**
-- Backup infrastructure (PBS) deployed and tested
-- Manual backups verified
-
-**To-do:**
-- Automatic backup schedule
-- VM snapshots before risky changes
-- UPS for graceful shutdown during power loss
-- Secondary Pi-hole for DNS failover
-
----
-
-## Troubleshooting reference
-
-**Container won't get IP:** Check bridge is VLAN-aware (`bridge-vlan-aware yes`),
-no VLAN tag on the interface (`tag=` should not exist), and Dnsmasq is listening
-on all VLAN interfaces (not just LAN).
-
-**Cross-VLAN DNS timeouts:** Pi-hole must have "Permit all origins" enabled in
-its DNS settings. Default "local only" restriction blocks queries from other VLANs.
-
-**Repository issues:** Using free no-subscription repo. Update with
-`apt update && apt dist-upgrade -y`.
-
+| Service | Purpose | Priority |
+|---|---|---|
+| Grafana + InfluxDB | Network monitoring dashboards | High |
+| Wazuh | SIEM / centralized log aggregation | High |
+| Vaultwarden | Self-hosted password manager | Medium |
+| Nextcloud | Self-hosted file and photo storage | Medium |
+| Secondary Pi-hole | DNS redundancy | Medium |
