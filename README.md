@@ -4,7 +4,6 @@ Portfolio documentation for a home network and server infrastructure. This repo
 demonstrates network architecture, Linux systems administration, virtualization,
 and infrastructure troubleshooting.
 
-> This is the **public-facing version** with sensitive details sanitized.
 
 ---
 
