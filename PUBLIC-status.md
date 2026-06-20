@@ -1,13 +1,14 @@
 # Homelab Status
 
-Last updated: 2026-06-15
+Last updated: 2026-06-20
 
 ---
 
 ## Current state: Operational
 
 Core infrastructure live. True VLAN segmentation achieved across all three
-VLANs. Open NAT confirmed. All services running.
+VLANs. Automated backups running. Full monitoring stack deployed with all
+sources reporting. All services running.
 
 ---
 
@@ -17,7 +18,11 @@ VLANs. Open NAT confirmed. All services running.
 |---|---|---|
 | OPNsense | Firewall / router / DHCP / DNS relay | ✅ Running |
 | Proxmox | Hypervisor / container host | ✅ Running |
+| Proxmox Backup Server | Dedicated backup target | ✅ Running |
 | Pi-hole (LXC) | Network-wide DNS ad-blocking | ✅ Running |
+| InfluxDB v2 (LXC) | Time-series metrics database | ✅ Running |
+| Grafana (LXC) | Monitoring dashboards | ✅ Running |
+| Telegraf | Metrics collection (multiple hosts) | ✅ Running |
 | Unbound | Recursive DNS resolver (DNSSEC) | ✅ Running |
 | Suricata | Intrusion detection (alert-only) | ✅ Running |
 | Dnsmasq | DHCP + local DNS for all VLANs | ✅ Running |
@@ -26,8 +31,21 @@ VLANs. Open NAT confirmed. All services running.
 
 ## Completed milestones
 
-### ✅ True VLAN segmentation (2026-06-15)
-All three VLANs now enforce proper inter-VLAN isolation via OPNsense firewall
+### ✅ Full monitoring stack (2026-06-20)
+InfluxDB v2 + Telegraf + Grafana deployed, with metrics flowing from the
+firewall (native Telegraf plugin), the hypervisor host, the metrics container
+itself, and the DNS sinkhole (custom integration). Dashboards built with Flux
+queries. See [monitoring.md](monitoring.md) for the full build, including the
+custom DNS-sinkhole integration written to work around the lack of a native
+agent plugin.
+
+### ✅ Proxmox automated backups
+Daily scheduled backups to a dedicated Proxmox Backup Server node, snapshot
+mode, Zstd compression, 7-day retention. First backup verified via the backup
+server CLI.
+
+### ✅ True VLAN segmentation
+All three VLANs enforce proper inter-VLAN isolation via OPNsense firewall
 rules. Each VLAN can only reach what it needs — no lateral movement between
 workstation, server, and management networks.
 - Workstation VLAN: blocked from MGMT and Server, DNS and internet allowed
@@ -57,8 +75,11 @@ logs — expected behavior after making the firewall the true WAN edge.
 
 ## In progress / next steps
 
-- Proxmox backup automation (top priority — no automated backups yet)
+- Expand metrics collection (more granular firewall/host/sinkhole inputs)
+- Build out remaining firewall dashboard panels
 - Secondary Pi-hole for DNS redundancy
-- Mullvad VPN with policy routing (exclude gaming traffic from tunnel)
-- Proxmox service expansion: Grafana, Wazuh, Vaultwarden, Nextcloud
+- Additional self-hosted services: SIEM, password manager, file/photo storage
+- Single-board-computer cluster for container orchestration (k3s) — learning
+  and portfolio project
+- VPN with policy routing (exclude gaming traffic from tunnel)
 - Suricata tuning after alert data accumulates

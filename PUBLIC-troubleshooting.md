@@ -197,3 +197,90 @@ eliminates these problems entirely.
 laptop GPUs tend to be strict about requiring a valid EDID. Verify KVM specs
 before purchasing for use with a laptop console.
 
+---
+
+## Problem 8 — DNS sinkhole v6 API: false "password incorrect" with app passwords
+
+**Symptoms:** authenticating against the sinkhole's API with an app-specific
+password (generated in the web UI for exactly this purpose) consistently
+returned a session object that was internally contradictory — flagged as both
+valid and "password incorrect," with no session token issued.
+
+**Root cause:** a known bug in the app-password feature of this major version,
+confirmed via multiple open upstream issue reports. The regular account
+password authenticated correctly through the same endpoint; only the
+app-password path was broken.
+
+**Fix:** authenticate with the actual account password instead of an app
+password. Reset it directly on the host via the CLI rather than trying to
+recover or guess an existing value. Auth succeeded immediately afterward,
+returning a valid session token.
+
+**Lesson:** when an API auth response is internally contradictory (both "valid"
+and "incorrect"), suspect a product-side bug in a newer/less-tested auth path
+before assuming the request itself is malformed. Test the primary credential
+path first.
+
+---
+
+## Problem 9 — "command not found" for a tool that was installed and running
+
+**Symptoms:** a CLI utility for the DNS sinkhole returned `command not found`
+inside its own container, despite the service running correctly (web UI up,
+DNS resolving).
+
+**Root cause:** a PATH issue, not an installation issue. The binary existed on
+disk (confirmed with `which` and `find`) but was not on the active shell
+session's `$PATH`.
+
+**Fix:** invoke with the full path rather than relying on `$PATH` resolution.
+
+**Lesson:** "command not found" doesn't necessarily mean something isn't
+installed — verify with `which` or `find` before assuming a broken install.
+
+---
+
+## Problem 10 — Service-managed script failing despite correct file permissions
+
+**Symptoms:** a custom script invoked by the monitoring agent's `exec`-style
+input failed with a permission error, even though the file had standard
+read/execute permissions.
+
+**Root cause:** the monitoring agent's service runs as a dedicated non-root
+service account, not root — and the script lived in `/root/`, which that
+account cannot access regardless of the script's own permission bits.
+
+**Fix:** moved the script to a location outside any user's home directory, with
+explicit ownership matching the service account that runs it.
+
+A follow-on "file not found" error (after the fix above) traced back to an
+earlier setup command being interrupted partway through a chained sequence —
+the directory-creation step never ran. Re-running each step individually with
+a verification check after each one isolated exactly which step had silently
+failed.
+
+**Lesson 1:** for any service-managed process, check which account it runs as
+before assuming a script in a convenient default location will be reachable.
+
+**Lesson 2:** when a multi-step command sequence gets interrupted, verify each
+step individually rather than re-running the whole chain — a single
+silently-skipped step can produce a confusing, seemingly unrelated error
+several steps later.
+
+---
+
+## Problem 11 — Windows `curl` is not curl
+
+**Symptoms:** standard curl command examples (`curl -X POST ... -H ... -d ...`)
+failed in a Windows PowerShell terminal with parameter-binding errors.
+
+**Root cause:** PowerShell aliases `curl` to `Invoke-WebRequest`, which uses
+entirely different flag syntax and doesn't support the line-continuation
+character used in most Linux/macOS curl examples.
+
+**Fix:** use PowerShell-native cmdlets (`Invoke-RestMethod`) with their own
+syntax instead of forcing curl-style flags.
+
+**Lesson:** command-line examples written for Linux/macOS need translation
+before running in Windows PowerShell — they are not interchangeable despite
+sharing a command name.

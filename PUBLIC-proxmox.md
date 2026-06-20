@@ -26,6 +26,8 @@
 | ID | Type | Name | VLAN | Status |
 |---|---|---|---|---|
 | 100 | LXC | Pi-hole | Server VLAN | ✅ Running |
+| 102 | LXC | InfluxDB | Server VLAN | ✅ Running |
+| 103 | LXC | Grafana | Server VLAN | ✅ Running |
 
 ### Pi-hole LXC notes
 
@@ -34,6 +36,13 @@
 - Pi-hole set to "Permit all origins" for cross-VLAN DNS queries
 - Upstream: OPNsense Unbound (recursive, no third-party forwarders)
 - lighttpd bound to Server VLAN IP (admin UI restricted)
+
+### InfluxDB / Grafana LXC notes
+
+- Deployed via community-maintained install scripts using default install mode
+- Advanced mode's VLAN tag setting broke container DHCP; default mode avoided it
+- Monitoring agent runs on the InfluxDB container
+- Full stack detail in [monitoring.md](monitoring.md)
 
 ### Proxmox bridge — VLAN awareness requirement
 
@@ -76,12 +85,12 @@ apt update
 
 ---
 
-## Planned services
+## Services — status
 
-| Service | Purpose | Priority |
+| Service | Purpose | Status |
 |---|---|---|
-| Grafana + InfluxDB | Network monitoring dashboards | High |
-| Wazuh | SIEM / centralized log aggregation | High |
-| Vaultwarden | Self-hosted password manager | Medium |
-| Nextcloud | Self-hosted file and photo storage | Medium |
-| Secondary Pi-hole | DNS redundancy | Medium |
+| Grafana + InfluxDB | Network monitoring dashboards | ✅ Live |
+| Wazuh | SIEM / centralized log aggregation | Planned |
+| Vaultwarden | Self-hosted password manager | Planned |
+| Nextcloud | Self-hosted file and photo storage | Planned |
+| Secondary Pi-hole | DNS redundancy | Planned |
